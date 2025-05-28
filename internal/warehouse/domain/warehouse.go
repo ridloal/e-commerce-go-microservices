@@ -1,0 +1,48 @@
+package domain
+
+import (
+	"time"
+)
+
+type Warehouse struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name" binding:"required"`
+	Location  *string   `json:"location,omitempty"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type CreateWarehouseRequest struct {
+	Name     string  `json:"name" binding:"required"`
+	Location *string `json:"location,omitempty"`
+}
+
+type ProductStock struct {
+	ID               string    `json:"id"`
+	WarehouseID      string    `json:"warehouse_id"`
+	ProductID        string    `json:"product_id"` // UUID from Product Service
+	Quantity         int       `json:"quantity"`
+	ReservedQuantity int       `json:"reserved_quantity"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+type AddStockRequest struct {
+	ProductID string `json:"product_id" binding:"required"`
+	Quantity  int    `json:"quantity" binding:"required,gt=0"` // Must be greater than 0
+}
+
+// Digunakan untuk Product Service mengambil info stok
+type ProductStockInfo struct {
+	ProductID      string `json:"product_id"`
+	TotalAvailable int    `json:"total_available"`
+}
+
+// Untuk update stok internal (reservasi, dll.)
+type UpdateStockInternalRequest struct {
+	ProductID        string
+	WarehouseID      string // Spesifik warehouse jika diperlukan, atau bisa diagregat
+	ChangeInQuantity int    // Bisa positif (menambah stok) atau negatif (mengurangi/mereservasi)
+	ChangeInReserved int    // Bisa positif (mereservasi) atau negatif (melepas reservasi)
+}
