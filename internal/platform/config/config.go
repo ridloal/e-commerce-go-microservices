@@ -34,6 +34,16 @@ func LoadProductDBConfig() DBConfig {
 	return DBConfig{DSN: dsn}
 }
 
+// Untuk Warehouse Service
+func LoadWarehouseDBConfig() DBConfig {
+	// Database: warehouse_db
+	dsn := "postgres://postgres:postgres@127.0.0.1:5432/warehouse_db?sslmode=disable"
+	if envDSN := os.Getenv("WAREHOUSE_DB_DSN"); envDSN != "" {
+		dsn = envDSN
+	}
+	return DBConfig{DSN: dsn}
+}
+
 func LoadServerConfig(defaultPort string) ServerConfig {
 	port := defaultPort
 	if envPort := os.Getenv("SERVER_PORT"); envPort != "" {
