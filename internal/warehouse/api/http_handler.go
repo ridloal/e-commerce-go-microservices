@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ridloal/e-commerce-go-microservices/internal/platform/logger"
@@ -31,12 +32,18 @@ func (h *WarehouseHandler) RegisterRoutes(router *gin.RouterGroup) {
 		whRoutes.POST("/:id/stocks", h.AddStock)                       // Add stock to a specific warehouse
 		whRoutes.GET("/:id/stocks/:product_id", h.GetStockInWarehouse) // Get stock for a product in a specific warehouse
 	}
-	// Endpoint for Product Service to query aggregated stock
-	// This might be better placed under a /products or /stockinfo path if it's purely for product views
+
+	stockOpsRoutes := router.Group("/stocks") // Grup baru untuk operasi stok umum
+	{
+		stockOpsRoutes.POST("/reserve", h.ReserveStock)
+		stockOpsRoutes.POST("/release", h.ReleaseStock)
+	}
+
 	stockInfoRoutes := router.Group("/stock-info")
 	{
 		stockInfoRoutes.GET("/products/:product_id", h.GetAggregatedProductStock)
 	}
+
 }
 
 func (h *WarehouseHandler) CreateWarehouse(c *gin.Context) {
@@ -152,4 +159,53 @@ func (h *WarehouseHandler) GetAggregatedProductStock(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, stockInfo)
+}
+
+func (h *WarehouseHandler) ReserveStock(c *gin.Context) {
+	var req domain.StockOperationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	err := h.warehouseService.ReserveStock(c.Request.Context(), req.ProductID, req.Quantity)
+	if err != nil {
+		if errors.Is(err, repository.ErrInsufficientStock) || errors.Is(err, repository.ErrProductStockNotFound) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Failed to reserve stock: " + err.Error()})
+			return
+		}
+		logger.Error("Hdl.ReserveStock: service error", err, nil)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error during stock reservation"})
+		return
+	}
+
+	c.JSON(http.StatusOK, domain.StockOperationResponse{
+		Message:   "Stock reserved successfully",
+		ProductID: req.ProductID,
+	})
+}
+
+func (h *WarehouseHandler) ReleaseStock(c *gin.Context) {
+	var req domain.StockOperationRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	err := h.warehouseService.ReleaseStock(c.Request.Context(), req.ProductID, req.Quantity)
+	if err != nil {
+		// Untuk release, error karena tidak ada yang di-release mungkin bukan critical server error
+		if errors.Is(err, repository.ErrProductStockNotFound) || strings.Contains(err.Error(), "could not release full quantity") {
+			c.JSON(http.StatusConflict, gin.H{"error": "Failed to release stock: " + err.Error()})
+			return
+		}
+		logger.Error("Hdl.ReleaseStock: service error", err, nil)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error during stock release"})
+		return
+	}
+
+	c.JSON(http.StatusOK, domain.StockOperationResponse{
+		Message:   "Stock released successfully",
+		ProductID: req.ProductID,
+	})
 }

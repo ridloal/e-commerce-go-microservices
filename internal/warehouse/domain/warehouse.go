@@ -46,3 +46,15 @@ type UpdateStockInternalRequest struct {
 	ChangeInQuantity int    // Bisa positif (menambah stok) atau negatif (mengurangi/mereservasi)
 	ChangeInReserved int    // Bisa positif (mereservasi) atau negatif (melepas reservasi)
 }
+
+type StockOperationRequest struct {
+	ProductID string `json:"product_id" binding:"required"`
+	Quantity  int    `json:"quantity" binding:"required,gt=0"`
+}
+
+// Response bisa sederhana atau mengembalikan status stok terbaru
+type StockOperationResponse struct {
+	Message   string `json:"message"`
+	ProductID string `json:"product_id"`
+	// Potentially new available stock, etc. (optional for now)
+}
