@@ -52,6 +52,14 @@ func LoadServerConfig(defaultPort string) ServerConfig {
 	return ServerConfig{Port: ":" + port}
 }
 
+func LoadOrderDBConfig() DBConfig {
+	dsn := "postgres://postgres:postgres@127.0.0.1:5432/order_db?sslmode=disable"
+	if envDSN := os.Getenv("ORDER_DB_DSN"); envDSN != "" {
+		dsn = envDSN
+	}
+	return DBConfig{DSN: dsn}
+}
+
 // Helper untuk mendapatkan port Environment Variable jika ada, atau default
 func GetEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
