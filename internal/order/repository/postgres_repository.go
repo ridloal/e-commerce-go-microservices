@@ -27,6 +27,10 @@ type OrderRepository interface {
 	CreateOrderWithItems(ctx context.Context, order *domain.Order, items []domain.OrderItem) error
 	// GetOrderByID, ListOrdersByUserID akan ditambahkan nanti
 	BeginTx(ctx context.Context) (DBTX, error)
+
+	GetPendingOrdersOlderThan(ctx context.Context, duration time.Duration) ([]domain.Order, error)
+	UpdateOrderStatus(ctx context.Context, orderID string, newStatus domain.OrderStatus) error
+	GetOrderItemsByOrderID(ctx context.Context, orderID string) ([]domain.OrderItem, error)
 }
 
 type postgresOrderRepository struct {
@@ -89,4 +93,67 @@ func (r *postgresOrderRepository) CreateOrderWithItems(ctx context.Context, orde
 	order.Items = items // Assign items to order struct
 
 	return tx.Commit()
+}
+
+func (r *postgresOrderRepository) GetPendingOrdersOlderThan(ctx context.Context, duration time.Duration) ([]domain.Order, error) {
+	query := `SELECT id, user_id, total_amount, status, created_at, updated_at
+              FROM orders
+              WHERE status = $1 AND created_at < $2
+              ORDER BY created_at ASC`
+
+	thresholdTime := time.Now().Add(-duration)
+	rows, err := r.db.QueryContext(ctx, query, domain.StatusPendingPayment, thresholdTime)
+	if err != nil {
+		logger.Error("GetPendingOrdersOlderThan: query failed", err, nil)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []domain.Order
+	for rows.Next() {
+		var o domain.Order
+		if err := rows.Scan(&o.ID, &o.UserID, &o.TotalAmount, &o.Status, &o.CreatedAt, &o.UpdatedAt); err != nil {
+			logger.Error("GetPendingOrdersOlderThan: scan failed", err, nil)
+			// Lanjutkan proses order lain jika satu gagal di-scan
+			continue
+		}
+		orders = append(orders, o)
+	}
+	return orders, rows.Err()
+}
+
+func (r *postgresOrderRepository) UpdateOrderStatus(ctx context.Context, orderID string, newStatus domain.OrderStatus) error {
+	query := `UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2`
+	res, err := r.db.ExecContext(ctx, query, newStatus, orderID)
+	if err != nil {
+		logger.Error("UpdateOrderStatus: exec failed", err, map[string]interface{}{"order_id": orderID, "new_status": newStatus})
+		return err
+	}
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		return ErrOrderNotFound
+	}
+	return nil
+}
+
+func (r *postgresOrderRepository) GetOrderItemsByOrderID(ctx context.Context, orderID string) ([]domain.OrderItem, error) {
+	query := `SELECT id, order_id, product_id, quantity, price_at_purchase, created_at
+              FROM order_items WHERE order_id = $1`
+	rows, err := r.db.QueryContext(ctx, query, orderID)
+	if err != nil {
+		logger.Error("GetOrderItemsByOrderID: query failed", err, nil)
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []domain.OrderItem
+	for rows.Next() {
+		var i domain.OrderItem
+		if err := rows.Scan(&i.ID, &i.OrderID, &i.ProductID, &i.Quantity, &i.PriceAtPurchase, &i.CreatedAt); err != nil {
+			logger.Error("GetOrderItemsByOrderID: scan failed", err, nil)
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	return items, rows.Err()
 }

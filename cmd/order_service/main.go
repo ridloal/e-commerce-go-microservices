@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/ridloal/e-commerce-go-microservices/internal/order/api"
 	"github.com/ridloal/e-commerce-go-microservices/internal/order/repository"
@@ -26,10 +28,17 @@ func main() {
 	}
 	defer db.Close()
 
+	paymentTimeoutStr := config.GetEnv("PAYMENT_TIMEOUT_MINUTES", "2") // Default 1 menit untuk testing
+	paymentTimeoutMinutes, err := time.ParseDuration(paymentTimeoutStr + "m")
+	if err != nil {
+		logger.Error("Invalid PAYMENT_TIMEOUT_MINUTES. Defaulting to 1 minute.", err, nil)
+		paymentTimeoutMinutes = 1 * time.Minute
+	}
+
 	// Setup Dependencies
 	orderRepository := repository.NewPostgresOrderRepository(db)
 	warehouseClient := service.NewHTTPWarehouseClient(warehouseServiceURL) // Client ke Warehouse Service
-	ordService := service.NewOrderService(orderRepository, warehouseClient)
+	ordService := service.NewOrderService(orderRepository, warehouseClient, paymentTimeoutMinutes)
 	orderHandler := api.NewOrderHandler(ordService)
 
 	// Setup Gin Router
@@ -39,7 +48,7 @@ func main() {
 
 	logger.Info("Order Service running on port " + serverCfg.Port)
 	logger.Info("Order Service connecting to Warehouse Service at " + warehouseServiceURL)
-	if err := router.Run(serverCfg.Port); err != nil {
-		logger.Error("Failed to run Order Service server", err, nil)
+	if errSrv := router.Run(serverCfg.Port); errSrv != nil {
+		logger.Error("Failed to run Order Service server", errSrv, nil)
 	}
 }
