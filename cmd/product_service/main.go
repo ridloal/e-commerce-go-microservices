@@ -36,6 +36,7 @@ func main() {
 
 	// Setup Gin Router
 	router := gin.Default()
+	router.RedirectTrailingSlash = false
 
 	apiV1 := router.Group("/api/v1")
 	productHandler.RegisterRoutes(apiV1)

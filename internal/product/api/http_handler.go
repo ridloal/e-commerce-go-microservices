@@ -22,6 +22,7 @@ func (h *ProductHandler) RegisterRoutes(router *gin.RouterGroup) {
 	productRoutes := router.Group("/products")
 	{
 		productRoutes.GET("", h.ListProducts)
+		productRoutes.GET("/", h.ListProducts)
 		productRoutes.GET("/:id", h.GetProduct)
 	}
 }

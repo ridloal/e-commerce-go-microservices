@@ -75,3 +75,27 @@ func GetEnvAsInt(key string, fallback int) int {
 	}
 	return fallback
 }
+
+type ServiceEndpoint struct {
+	Name string
+	URL  string
+	// Bisa ditambahkan prefix path jika layanan di-host dengan prefix
+}
+
+type GatewayConfig struct {
+	ListenPort          string
+	UserServiceURL      string
+	ProductServiceURL   string
+	WarehouseServiceURL string
+	OrderServiceURL     string
+}
+
+func LoadGatewayConfig() GatewayConfig {
+	return GatewayConfig{
+		ListenPort:          GetEnv("API_GATEWAY_PORT", "8080"), // API Gateway akan berjalan di port 8080
+		UserServiceURL:      GetEnv("USER_SERVICE_URL", "http://localhost:8081"),
+		ProductServiceURL:   GetEnv("PRODUCT_SERVICE_URL", "http://localhost:8082"),
+		WarehouseServiceURL: GetEnv("WAREHOUSE_SERVICE_URL", "http://localhost:8083"),
+		OrderServiceURL:     GetEnv("ORDER_SERVICE_URL", "http://localhost:8084"),
+	}
+}
