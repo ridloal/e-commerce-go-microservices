@@ -42,6 +42,8 @@ type WarehouseRepository interface {
 	DeductCommittedStock(ctx context.Context, dbops DBTX, warehouseID, productID string, quantityToDeduct int) error
 
 	BeginTx(ctx context.Context) (DBTX, error)
+
+	FindWarehousesWithActiveReservations(ctx context.Context, productIDs []string) ([]domain.ProductWarehouseReservationInfo, error)
 }
 
 // DBTX adalah interface yang bisa berupa *sql.DB atau *sql.Tx
@@ -412,4 +414,39 @@ func (r *postgresWarehouseRepository) DeductCommittedStock(ctx context.Context, 
 		return ErrInsufficientStock // Atau error yang lebih spesifik
 	}
 	return nil
+}
+
+func (r *postgresWarehouseRepository) FindWarehousesWithActiveReservations(ctx context.Context, productIDs []string) ([]domain.ProductWarehouseReservationInfo, error) {
+	if len(productIDs) == 0 {
+		return []domain.ProductWarehouseReservationInfo{}, nil
+	}
+
+	query := `
+        SELECT ps.product_id, ps.warehouse_id, ps.reserved_quantity
+        FROM product_stocks ps
+        JOIN warehouses w ON ps.warehouse_id = w.id
+        WHERE ps.product_id = ANY($1)
+          AND ps.reserved_quantity > 0
+          AND w.is_active = TRUE
+        ORDER BY ps.product_id, ps.reserved_quantity DESC;
+    `
+
+	rows, err := r.db.QueryContext(ctx, query, pq.Array(productIDs))
+	if err != nil {
+		logger.Error("FindWarehousesWithActiveReservations: query failed", err, map[string]interface{}{"product_ids_count": len(productIDs)})
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []domain.ProductWarehouseReservationInfo
+	for rows.Next() {
+		var info domain.ProductWarehouseReservationInfo
+		if err := rows.Scan(&info.ProductID, &info.WarehouseID, &info.Reserved); err != nil {
+			logger.Error("FindWarehousesWithActiveReservations: scan failed", err, nil)
+			// Lanjutkan jika satu baris gagal di-scan
+			continue
+		}
+		results = append(results, info)
+	}
+	return results, rows.Err()
 }

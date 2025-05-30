@@ -44,6 +44,7 @@ func (h *WarehouseHandler) RegisterRoutes(router *gin.RouterGroup) {
 	stockInfoRoutes := router.Group("/stock-info")
 	{
 		stockInfoRoutes.GET("/products/:product_id", h.GetAggregatedProductStock)
+		stockInfoRoutes.POST("/reserved-locations", h.FindWarehousesWithReservations)
 	}
 
 }
@@ -253,4 +254,25 @@ func (h *WarehouseHandler) DeductStock(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Stock deducted successfully"})
+}
+
+func (h *WarehouseHandler) FindWarehousesWithReservations(c *gin.Context) {
+	var req domain.FindWarehousesWithReservationsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	if len(req.ProductIDs) == 0 {
+		c.JSON(http.StatusOK, []domain.ProductWarehouseReservationInfo{})
+		return
+	}
+
+	infos, err := h.warehouseService.FindWarehousesForReservedProducts(c.Request.Context(), req.ProductIDs)
+	if err != nil {
+		logger.Error("Hdl.FindWarehousesWithReservations: service error", err, nil)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to find warehouse reservations"})
+		return
+	}
+	c.JSON(http.StatusOK, infos)
 }

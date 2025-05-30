@@ -31,6 +31,8 @@ type WarehouseService interface {
 	ReserveStock(ctx context.Context, productID string, quantityToReserve int) error
 	ReleaseStock(ctx context.Context, productID string, quantityToRelease int) error
 	DeductStockAfterSale(ctx context.Context, req domain.DeductStockRequest) error
+
+	FindWarehousesForReservedProducts(ctx context.Context, productIDs []string) ([]domain.ProductWarehouseReservationInfo, error)
 }
 
 type warehouseServiceImpl struct {
@@ -343,4 +345,11 @@ func (s *warehouseServiceImpl) DeductStockAfterSale(ctx context.Context, req dom
 	}
 
 	return tx.Commit()
+}
+
+func (s *warehouseServiceImpl) FindWarehousesForReservedProducts(ctx context.Context, productIDs []string) ([]domain.ProductWarehouseReservationInfo, error) {
+	if len(productIDs) == 0 {
+		return []domain.ProductWarehouseReservationInfo{}, nil
+	}
+	return s.repo.FindWarehousesWithActiveReservations(ctx, productIDs)
 }

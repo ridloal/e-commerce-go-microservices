@@ -71,3 +71,14 @@ type DeductStockRequest struct {
 	Quantity    int    `json:"quantity" binding:"required,gt=0"`
 	WarehouseID string `json:"warehouse_id" binding:"required"`
 }
+
+type ProductWarehouseReservationInfo struct {
+	ProductID   string `json:"product_id"`
+	WarehouseID string `json:"warehouse_id"`
+	Reserved    int    `json:"reserved"` // Jumlah yang direservasi di gudang ini untuk produk ini
+}
+
+// Request untuk mencari gudang dengan reservasi
+type FindWarehousesWithReservationsRequest struct {
+	ProductIDs []string `json:"product_ids" binding:"required,dive,uuid"`
+}
