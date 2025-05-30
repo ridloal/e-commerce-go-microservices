@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -23,6 +24,7 @@ func (h *OrderHandler) RegisterRoutes(router *gin.RouterGroup) {
 	orderRoutes := router.Group("/orders")
 	{
 		orderRoutes.POST("", h.CreateOrder)
+		orderRoutes.POST("/:order_id/confirm-payment", h.ConfirmPayment)
 		// Tambahkan GET /:id, GET /user/:user_id nanti
 	}
 }
@@ -64,4 +66,27 @@ func (h *OrderHandler) CreateOrder(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, resp)
+}
+
+func (h *OrderHandler) ConfirmPayment(c *gin.Context) {
+	orderID := c.Param("order_id")
+	if orderID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Order ID is required"})
+		return
+	}
+
+	// Di dunia nyata, di sini ada validasi apakah request ini sah (misal, dari payment gateway callback)
+
+	order, err := h.orderService.ConfirmPayment(c.Request.Context(), orderID)
+	if err != nil {
+		if errors.Is(err, service.ErrOrderCannotBeConfirmed) {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()}) // 409
+			return
+		}
+		// ErrStockDeductionFailed juga bisa di-handle khusus jika perlu respons berbeda
+		logger.Error(fmt.Sprintf("Hdl.ConfirmPayment: service error for order %s", orderID), err, nil)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to confirm payment for order"})
+		return
+	}
+	c.JSON(http.StatusOK, order)
 }

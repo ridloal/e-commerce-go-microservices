@@ -31,6 +31,7 @@ type OrderRepository interface {
 	GetPendingOrdersOlderThan(ctx context.Context, duration time.Duration) ([]domain.Order, error)
 	UpdateOrderStatus(ctx context.Context, orderID string, newStatus domain.OrderStatus) error
 	GetOrderItemsByOrderID(ctx context.Context, orderID string) ([]domain.OrderItem, error)
+	GetOrderByID(ctx context.Context, orderID string) (*domain.Order, error)
 }
 
 type postgresOrderRepository struct {
@@ -156,4 +157,21 @@ func (r *postgresOrderRepository) GetOrderItemsByOrderID(ctx context.Context, or
 		items = append(items, i)
 	}
 	return items, rows.Err()
+}
+
+func (r *postgresOrderRepository) GetOrderByID(ctx context.Context, orderID string) (*domain.Order, error) {
+	query := `SELECT id, user_id, total_amount, status, created_at, updated_at FROM orders WHERE id = $1`
+	var o domain.Order
+	err := r.db.QueryRowContext(ctx, query, orderID).Scan(
+		&o.ID, &o.UserID, &o.TotalAmount, &o.Status, &o.CreatedAt, &o.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrOrderNotFound
+		}
+		logger.Error("GetOrderByID: query failed", err, nil)
+		return nil, err
+	}
+	// Dapatkan items jika perlu, atau biarkan service layer yang memanggil GetOrderItemsByOrderID
+	return &o, nil
 }

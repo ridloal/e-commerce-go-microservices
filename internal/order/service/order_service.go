@@ -10,17 +10,21 @@ import (
 	"github.com/ridloal/e-commerce-go-microservices/internal/order/domain"
 	"github.com/ridloal/e-commerce-go-microservices/internal/order/repository"
 	"github.com/ridloal/e-commerce-go-microservices/internal/platform/logger"
+	warehouseDomain "github.com/ridloal/e-commerce-go-microservices/internal/warehouse/domain"
 	"github.com/robfig/cron/v3"
 )
 
 var (
 	ErrOrderCreationFailed    = errors.New("order creation failed")
 	ErrStockReservationFailed = errors.New("stock reservation failed for one or more items")
+	ErrOrderCannotBeConfirmed = errors.New("order cannot be confirmed, invalid current status or order not found")
+	ErrStockDeductionFailed   = errors.New("stock deduction failed for one or more items")
 )
 
 type OrderService interface {
 	CreateOrder(ctx context.Context, req domain.CreateOrderRequest) (*domain.CreateOrderResponse, error)
 	ProcessPaymentTimeouts(ctx context.Context) // Fungsi untuk scheduler
+	ConfirmPayment(ctx context.Context, orderID string) (*domain.Order, error)
 }
 
 type orderServiceImpl struct {
@@ -179,4 +183,130 @@ func (s *orderServiceImpl) CreateOrder(ctx context.Context, req domain.CreateOrd
 	}
 
 	return &domain.CreateOrderResponse{Order: *newOrder}, nil
+}
+
+func (s *orderServiceImpl) ConfirmPayment(ctx context.Context, orderID string) (*domain.Order, error) {
+	// 1. Dapatkan order
+	order, err := s.orderRepo.GetOrderByID(ctx, orderID)
+	if err != nil {
+		if errors.Is(err, repository.ErrOrderNotFound) {
+			return nil, ErrOrderCannotBeConfirmed
+		}
+		logger.Error(fmt.Sprintf("ConfirmPayment: failed to get order %s", orderID), err, nil)
+		return nil, err
+	}
+
+	// 2. Validasi status order (hanya PENDING_PAYMENT yang bisa dikonfirmasi)
+	if order.Status != domain.StatusPendingPayment {
+		logger.Warn(fmt.Sprintf("ConfirmPayment: attempt to confirm order %s with invalid status %s", orderID, order.Status), nil)
+		return nil, ErrOrderCannotBeConfirmed
+	}
+
+	// 3. Dapatkan item-item order
+	items, err := s.orderRepo.GetOrderItemsByOrderID(ctx, orderID)
+	if err != nil || len(items) == 0 {
+		logger.Error(fmt.Sprintf("ConfirmPayment: failed to get items for order %s or order has no items", orderID), err, nil)
+		// Mungkin update status order ke FAILED di sini jika item tidak ada
+		return nil, fmt.Errorf("failed to retrieve items for order %s: %w", orderID, err)
+	}
+
+	productIDsInOrder := make([]string, 0, len(items))
+	itemMapByProductID := make(map[string]domain.OrderItem) // Untuk akses mudah ke quantity per item
+	for _, item := range items {
+		productIDsInOrder = append(productIDsInOrder, item.ProductID)
+		itemMapByProductID[item.ProductID] = item
+	}
+
+	// 4. Cari gudang mana saja yang memiliki reservasi untuk produk-produk dalam order ini
+	warehouseReservations, err := s.warehouseClient.FindWarehousesWithReservations(ctx, productIDsInOrder)
+	if err != nil {
+		logger.Error(fmt.Sprintf("ConfirmPayment: Failed to find warehouses with reservations for order %s", orderID), err, nil)
+		// Ini bukan error fatal untuk status order, tapi stock deduction akan gagal.
+		// Kita bisa lanjutkan update status order dan catat error ini untuk investigasi.
+		// Alternatif: GAGALKAN konfirmasi jika ini tidak bisa didapatkan? Tergantung kebutuhan bisnis.
+		// Untuk simulasi, kita log dan lanjutkan, tapi tandai bahwa deduction mungkin tidak terjadi.
+	}
+
+	logger.Info(fmt.Sprintf("ConfirmPayment: Found %d potential warehouse locations with reservations for products in order %s", len(warehouseReservations), orderID))
+
+	// 5. Iterasi per item order, lalu iterasi per gudang yang punya reservasi untuk item tsb,
+	//    dan coba kurangi stok.
+	allDeductionsSuccessful := true
+	for _, item := range items {
+		quantityToDeductForItem := item.Quantity // Total yang perlu dikurangi untuk item ini
+		if quantityToDeductForItem <= 0 {
+			continue
+		} // Lewati jika sudah 0 (seharusnya tidak terjadi)
+
+		successfullyDeductedForThisItem := 0
+
+		// Cari semua gudang yang punya reservasi untuk item.ProductID ini
+		for _, whReservation := range warehouseReservations {
+			if whReservation.ProductID == item.ProductID && whReservation.Reserved > 0 {
+				if quantityToDeductForItem <= 0 {
+					break
+				} // Sudah cukup dikurangi untuk item ini
+
+				// Jumlah yang bisa dikurangi dari gudang ini adalah min(yang perlu dikurangi, yang direservasi di gudang ini)
+				var amountToDeductFromThisWarehouse int
+				if quantityToDeductForItem <= whReservation.Reserved {
+					amountToDeductFromThisWarehouse = quantityToDeductForItem
+				} else {
+					amountToDeductFromThisWarehouse = whReservation.Reserved
+				}
+
+				if amountToDeductFromThisWarehouse > 0 {
+					logger.Info(fmt.Sprintf("ConfirmPayment: Attempting to deduct %d of ProductID %s from WarehouseID %s for OrderID %s",
+						amountToDeductFromThisWarehouse, item.ProductID, whReservation.WarehouseID, orderID))
+
+					deductReq := warehouseDomain.DeductStockRequest{
+						ProductID:   item.ProductID,
+						Quantity:    amountToDeductFromThisWarehouse,
+						WarehouseID: whReservation.WarehouseID,
+					}
+					err := s.warehouseClient.DeductStock(ctx, deductReq) // Memanggil client
+					if err != nil {
+						logger.Error(fmt.Sprintf("ConfirmPayment: Failed to deduct stock for ProductID %s from WarehouseID %s (Order %s)",
+							item.ProductID, whReservation.WarehouseID, orderID), err, nil)
+						allDeductionsSuccessful = false
+						// PENTING: Lanjutkan ke gudang lain atau item lain. JANGAN return error di sini.
+						// Kita ingin mencoba mengurangi sebanyak mungkin.
+					} else {
+						logger.Info(fmt.Sprintf("ConfirmPayment: Successfully deducted %d of ProductID %s from WarehouseID %s",
+							amountToDeductFromThisWarehouse, item.ProductID, whReservation.WarehouseID))
+						quantityToDeductForItem -= amountToDeductFromThisWarehouse
+						successfullyDeductedForThisItem += amountToDeductFromThisWarehouse
+					}
+				}
+			}
+		}
+		// Setelah mencoba semua warehouse untuk item ini:
+		if quantityToDeductForItem > 0 {
+			logger.Error(fmt.Sprintf("ConfirmPayment: Could not fully deduct stock for ProductID %s (Order %s). Needed %d, remaining to deduct %d.",
+				item.ProductID, orderID, item.Quantity, quantityToDeductForItem), nil, nil)
+			allDeductionsSuccessful = false
+		}
+	}
+
+	if !allDeductionsSuccessful {
+		// Log error/warning tingkat tinggi bahwa tidak semua stok berhasil dikurangi
+		logger.Error(fmt.Sprintf("ConfirmPayment: One or more stock deductions failed for OrderID %s. Manual review may be needed.", orderID), nil, nil)
+		// Bergantung pada kebijakan bisnis, ini bisa jadi alasan untuk TIDAK mengupdate status ke PAYMENT_CONFIRMED
+		// atau memindahkannya ke status khusus "PARTIALLY_ALLOCATED" atau "AWAITING_STOCK_VERIFICATION".
+		// UNTUK SIMULASI INI, kita tetap lanjutkan update status, tapi dengan catatan.
+	}
+
+	// 6. Update status order menjadi PAYMENT_CONFIRMED
+	newStatus := domain.StatusPaymentConfirmed
+	err = s.orderRepo.UpdateOrderStatus(ctx, order.ID, newStatus)
+	if err != nil {
+		logger.Error(fmt.Sprintf("ConfirmPayment: failed to update order status for %s after payment", orderID), err, nil)
+		// Pembayaran berhasil tapi status gagal update. Perlu mekanisme retry atau alert.
+		return nil, fmt.Errorf("failed to update order status for %s: %w", orderID, err)
+	}
+
+	order.Status = newStatus
+	order.UpdatedAt = time.Now() // Seharusnya dihandle oleh UpdateOrderStatus di repo
+	logger.Info(fmt.Sprintf("Order %s payment confirmed. Status updated to %s.", orderID, newStatus))
+	return order, nil
 }

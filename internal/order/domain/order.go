@@ -9,6 +9,7 @@ type OrderStatus string
 const (
 	StatusPendingPayment   OrderStatus = "PENDING_PAYMENT"
 	StatusPaymentTimeout   OrderStatus = "PAYMENT_TIMEOUT"
+	StatusPaymentConfirmed OrderStatus = "PAYMENT_CONFIRMED"
 	StatusAwaitingShipment OrderStatus = "AWAITING_SHIPMENT"
 	StatusShipped          OrderStatus = "SHIPPED"
 	StatusDelivered        OrderStatus = "DELIVERED"
