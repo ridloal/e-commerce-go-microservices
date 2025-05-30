@@ -58,3 +58,16 @@ type StockOperationResponse struct {
 	ProductID string `json:"product_id"`
 	// Potentially new available stock, etc. (optional for now)
 }
+
+type TransferStockRequest struct {
+	ProductID         string `json:"product_id" binding:"required"`
+	SourceWarehouseID string `json:"source_warehouse_id" binding:"required"`
+	TargetWarehouseID string `json:"target_warehouse_id" binding:"required"`
+	Quantity          int    `json:"quantity" binding:"required,gt=0"`
+}
+
+type DeductStockRequest struct {
+	ProductID   string `json:"product_id" binding:"required"`
+	Quantity    int    `json:"quantity" binding:"required,gt=0"`
+	WarehouseID string `json:"warehouse_id" binding:"required"`
+}

@@ -4,8 +4,8 @@ CREATE TYPE order_status AS ENUM (
     'SHIPPED',
     'DELIVERED',
     'CANCELLED',
-    'FAILED' 
-    -- Tambahkan status lain jika perlu
+    'FAILED',
+    'PAYMENT_TIMEOUT'
 );
 
 CREATE TABLE IF NOT EXISTS orders (

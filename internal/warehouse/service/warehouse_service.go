@@ -25,11 +25,12 @@ type WarehouseService interface {
 	AddProductStock(ctx context.Context, warehouseID string, req domain.AddStockRequest) (*domain.ProductStock, error)
 	GetProductStockByWarehouse(ctx context.Context, warehouseID, productID string) (*domain.ProductStock, error)
 	GetAggregatedProductStock(ctx context.Context, productID string) (*domain.ProductStockInfo, error)
+	TransferProductStock(ctx context.Context, req domain.TransferStockRequest) error
 
 	// Internal methods for Order Service (will require transactions)
 	ReserveStock(ctx context.Context, productID string, quantityToReserve int) error
 	ReleaseStock(ctx context.Context, productID string, quantityToRelease int) error
-	// DeductStockAfterSale (ctx context.Context, productID string, quantitySold int) error
+	DeductStockAfterSale(ctx context.Context, req domain.DeductStockRequest) error
 }
 
 type warehouseServiceImpl struct {
@@ -113,6 +114,29 @@ func (s *warehouseServiceImpl) GetAggregatedProductStock(ctx context.Context, pr
 		ProductID:      productID,
 		TotalAvailable: totalAvailable,
 	}, nil
+}
+
+func (s *warehouseServiceImpl) TransferProductStock(ctx context.Context, req domain.TransferStockRequest) error {
+	if req.SourceWarehouseID == req.TargetWarehouseID {
+		return errors.New("source and target warehouse IDs cannot be the same for a transfer")
+	}
+	// Validasi tambahan: cek apakah warehouse sumber dan tujuan ada dan aktif (opsional, repo bisa handle FK)
+	// _, err := s.repo.GetWarehouseByID(ctx, req.SourceWarehouseID)
+	// if err != nil { return fmt.Errorf("source warehouse not found: %w", err) }
+	// _, err = s.repo.GetWarehouseByID(ctx, req.TargetWarehouseID)
+	// if err != nil { return fmt.Errorf("target warehouse not found: %w", err) }
+
+	err := s.repo.TransferStock(ctx, req.ProductID, req.SourceWarehouseID, req.TargetWarehouseID, req.Quantity)
+	if err != nil {
+		logger.Error("Svc.TransferProductStock: repo error", err, map[string]interface{}{
+			"product_id": req.ProductID,
+			"source_wh":  req.SourceWarehouseID,
+			"target_wh":  req.TargetWarehouseID,
+			"quantity":   req.Quantity,
+		})
+		return err
+	}
+	return nil
 }
 
 // ReserveStock attempts to reserve stock for a product across active warehouses.
@@ -298,4 +322,25 @@ func (s *warehouseServiceImpl) ReleaseStock(ctx context.Context, productID strin
 	}
 
 	return nil
+}
+
+func (s *warehouseServiceImpl) DeductStockAfterSale(ctx context.Context, req domain.DeductStockRequest) error {
+	tx, err := s.repo.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction for stock deduction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Kunci baris untuk update
+	_, err = s.repo.GetProductStockForUpdate(ctx, tx, req.WarehouseID, req.ProductID)
+	if err != nil {
+		return fmt.Errorf("failed to lock stock for deduction (WH: %s, Prod: %s): %w", req.WarehouseID, req.ProductID, err)
+	}
+
+	err = s.repo.DeductCommittedStock(ctx, tx, req.WarehouseID, req.ProductID, req.Quantity)
+	if err != nil {
+		return fmt.Errorf("failed to deduct committed stock (WH: %s, Prod: %s, Qty: %d): %w", req.WarehouseID, req.ProductID, req.Quantity, err)
+	}
+
+	return tx.Commit()
 }

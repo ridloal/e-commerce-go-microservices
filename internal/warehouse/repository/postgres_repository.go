@@ -30,6 +30,7 @@ type WarehouseRepository interface {
 	CreateOrUpdateProductStock(ctx context.Context, stock *domain.ProductStock) error
 	GetProductStock(ctx context.Context, warehouseID, productID string) (*domain.ProductStock, error)
 	GetTotalAvailableStockByProductID(ctx context.Context, productID string) (int, error)
+	TransferStock(ctx context.Context, productID, sourceWarehouseID, targetWarehouseID string, quantity int) error
 
 	// Internal methods for more complex stock operations (typically within a transaction)
 	// These may need to be called by the service layer with db tx object
@@ -38,6 +39,7 @@ type WarehouseRepository interface {
 	IncreaseReservedStock(ctx context.Context, dbops DBTX, warehouseID, productID string, amount int) error
 	DecreaseReservedStock(ctx context.Context, dbops DBTX, warehouseID, productID string, amount int) error // For releasing reservation
 	GetProductStockForUpdate(ctx context.Context, dbops DBTX, warehouseID, productID string) (*domain.ProductStock, error)
+	DeductCommittedStock(ctx context.Context, dbops DBTX, warehouseID, productID string, quantityToDeduct int) error
 
 	BeginTx(ctx context.Context) (DBTX, error)
 }
@@ -201,6 +203,68 @@ func (r *postgresWarehouseRepository) GetTotalAvailableStockByProductID(ctx cont
 	return totalAvailable, nil
 }
 
+func (r *postgresWarehouseRepository) TransferStock(ctx context.Context, productID, sourceWarehouseID, targetWarehouseID string, quantity int) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		logger.Error("TransferStock: failed to begin transaction", err, nil)
+		return fmt.Errorf("failed to begin transaction for stock transfer: %w", err)
+	}
+	defer tx.Rollback() // Rollback jika tidak di-commit
+
+	// 1. Kunci baris stok di gudang sumber
+	sourceStock, err := r.GetProductStockForUpdate(ctx, tx, sourceWarehouseID, productID)
+	if err != nil {
+		if errors.Is(err, ErrProductStockNotFound) {
+			return fmt.Errorf("product %s not found in source warehouse %s: %w", productID, sourceWarehouseID, err)
+		}
+		return fmt.Errorf("failed to get stock from source warehouse %s for product %s: %w", sourceWarehouseID, productID, err)
+	}
+
+	// 2. Cek apakah stok cukup di gudang sumber (total quantity, bukan available)
+	if sourceStock.Quantity < quantity {
+		return fmt.Errorf("insufficient total stock for product %s in source warehouse %s. Available: %d, Requested: %d: %w",
+			productID, sourceWarehouseID, sourceStock.Quantity, quantity, ErrInsufficientStock)
+	}
+	// Pastikan Reserved Quantity tidak melebihi quantity baru setelah dikurangi
+	if (sourceStock.Quantity - quantity) < sourceStock.ReservedQuantity {
+		return fmt.Errorf("transfer failed: reducing quantity for product %s in source warehouse %s below reserved quantity (%d < %d): %w",
+			productID, sourceWarehouseID, (sourceStock.Quantity - quantity), sourceStock.ReservedQuantity, ErrInsufficientStock)
+	}
+
+	// 3. Kurangi stok dari gudang sumber
+	// Langsung mengurangi 'quantity', bukan 'reserved_quantity'
+	querySource := `UPDATE product_stocks SET quantity = quantity - $1, updated_at = NOW()
+                    WHERE warehouse_id = $2 AND product_id = $3`
+	_, err = tx.ExecContext(ctx, querySource, quantity, sourceWarehouseID, productID)
+	if err != nil {
+		logger.Error("TransferStock: failed to decrease stock from source", err, nil)
+		return fmt.Errorf("failed to decrease stock from source warehouse %s: %w", sourceWarehouseID, err)
+	}
+
+	// 4. Tambah atau update stok di gudang tujuan (buat entri jika belum ada)
+	// Kunci baris entri stok di gudang tujuan jika sudah ada, atau siapkan untuk insert
+	// Ini bisa menggunakan ON CONFLICT DO UPDATE
+	queryTarget := `
+        INSERT INTO product_stocks (warehouse_id, product_id, quantity, reserved_quantity, created_at, updated_at)
+        VALUES ($1, $2, $3, 0, NOW(), NOW())
+        ON CONFLICT (warehouse_id, product_id) DO UPDATE SET
+        quantity = product_stocks.quantity + EXCLUDED.quantity,
+        updated_at = NOW()
+        WHERE product_stocks.warehouse_id = $1 AND product_stocks.product_id = $2`
+
+	_, err = tx.ExecContext(ctx, queryTarget, targetWarehouseID, productID, quantity)
+	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23503" { // foreign_key_violation for targetWarehouseID
+			logger.Error("TransferStock: target warehouse does not exist", err, map[string]interface{}{"target_warehouse_id": targetWarehouseID})
+			return fmt.Errorf("target warehouse %s does not exist: %w", targetWarehouseID, err)
+		}
+		logger.Error("TransferStock: failed to increase/update stock in target", err, nil)
+		return fmt.Errorf("failed to update stock in target warehouse %s: %w", targetWarehouseID, err)
+	}
+
+	return tx.Commit()
+}
+
 // --- Transactional Stock Methods ---
 func (r *postgresWarehouseRepository) BeginTx(ctx context.Context) (DBTX, error) {
 	return r.db.BeginTx(ctx, nil)
@@ -315,6 +379,37 @@ func (r *postgresWarehouseRepository) DecreaseReservedStock(ctx context.Context,
 	rowsAffected, _ := res.RowsAffected()
 	if rowsAffected == 0 {
 		return ErrStockConflict // or product not found, or reserved_quantity couldn't be decreased that much
+	}
+	return nil
+}
+
+func (r *postgresWarehouseRepository) DeductCommittedStock(ctx context.Context, dbops DBTX, warehouseID, productID string, quantityToDeduct int) error {
+	// Metode ini mengurangi reserved_quantity DAN quantity aktual.
+	query := `UPDATE product_stocks
+              SET quantity = quantity - $1,
+                  reserved_quantity = reserved_quantity - $1,
+                  updated_at = NOW()
+              WHERE warehouse_id = $2 AND product_id = $3
+                AND (reserved_quantity - $1) >= 0
+                AND (quantity - $1) >= 0`
+	// Mungkin perlu juga AND quantity >= reserved_quantity
+
+	res, err := dbops.ExecContext(ctx, query, quantityToDeduct, warehouseID, productID)
+	if err != nil {
+		if pqErr, ok := err.(*pq.Error); ok && pqErr.Code == "23514" { // check_violation
+			logger.Error("DeductCommittedStock: check violation (negative stock/reserved)", err, nil)
+			return ErrInsufficientStock // Atau error yang lebih spesifik
+		}
+		logger.Error("DeductCommittedStock: exec failed", err, nil)
+		return err
+	}
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		// Ini bisa berarti stok tidak cukup lagi, atau reservasi kurang, atau produk tidak ada
+		logger.Error("DeductCommittedStock: no rows affected, potential inconsistency or insufficient reserved stock", nil, map[string]interface{}{
+			"warehouse_id": warehouseID, "product_id": productID, "quantity": quantityToDeduct,
+		})
+		return ErrInsufficientStock // Atau error yang lebih spesifik
 	}
 	return nil
 }

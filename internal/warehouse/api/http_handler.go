@@ -37,6 +37,8 @@ func (h *WarehouseHandler) RegisterRoutes(router *gin.RouterGroup) {
 	{
 		stockOpsRoutes.POST("/reserve", h.ReserveStock)
 		stockOpsRoutes.POST("/release", h.ReleaseStock)
+		stockOpsRoutes.POST("/transfer", h.TransferStock)
+		stockOpsRoutes.POST("/deduct", h.DeductStock)
 	}
 
 	stockInfoRoutes := router.Group("/stock-info")
@@ -208,4 +210,47 @@ func (h *WarehouseHandler) ReleaseStock(c *gin.Context) {
 		Message:   "Stock released successfully",
 		ProductID: req.ProductID,
 	})
+}
+
+func (h *WarehouseHandler) TransferStock(c *gin.Context) {
+	var req domain.TransferStockRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	err := h.warehouseService.TransferProductStock(c.Request.Context(), req)
+	if err != nil {
+		if errors.Is(err, repository.ErrInsufficientStock) ||
+			strings.Contains(err.Error(), "source and target warehouse IDs cannot be the same") ||
+			strings.Contains(err.Error(), "not found in source warehouse") ||
+			strings.Contains(err.Error(), "target warehouse does not exist") {
+			c.JSON(http.StatusConflict, gin.H{"error": "Stock transfer failed: " + err.Error()})
+			return
+		}
+		logger.Error("Hdl.TransferStock: service error", err, nil)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error during stock transfer"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Stock transferred successfully"})
+}
+
+func (h *WarehouseHandler) DeductStock(c *gin.Context) {
+	var req domain.DeductStockRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	err := h.warehouseService.DeductStockAfterSale(c.Request.Context(), req)
+	if err != nil {
+		if errors.Is(err, repository.ErrInsufficientStock) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Stock deduction failed: " + err.Error()})
+			return
+		}
+		logger.Error("Hdl.DeductStock: service error", err, nil)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error during stock deduction"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Stock deducted successfully"})
 }
