@@ -10,3 +10,12 @@ CREATE TABLE IF NOT EXISTS order_items (
 
 CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
 CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON order_items(product_id);
+
+-- Seed Data for Order Items for Order1 --
+-- Item 1: Product1 (Laptop)
+INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES
+('d0eebc99-9c0b-4ef8-bb6d-6bb9bd380a41', 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a31', 1, 1200.50);
+
+-- Item 2: Product2 (Mouse)
+INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES
+('d0eebc99-9c0b-4ef8-bb6d-6bb9bd380a41', 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a32', 2, 25.99);

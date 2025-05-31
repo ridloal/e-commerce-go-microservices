@@ -12,3 +12,24 @@ CREATE TABLE IF NOT EXISTS product_stocks (
 
 CREATE INDEX IF NOT EXISTS idx_product_stocks_warehouse_id ON product_stocks(warehouse_id);
 CREATE INDEX IF NOT EXISTS idx_product_stocks_product_id ON product_stocks(product_id);
+
+-- Seed Data for Product Stocks --
+-- Product1 (Laptop) in Warehouse1 (Jakarta)
+INSERT INTO product_stocks (warehouse_id, product_id, quantity, reserved_quantity) VALUES
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a21', 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a31', 50, 5);
+
+-- Product1 (Laptop) in Warehouse2 (Surabaya)
+INSERT INTO product_stocks (warehouse_id, product_id, quantity, reserved_quantity) VALUES
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a31', 20, 0);
+
+-- Product2 (Mouse) in Warehouse1 (Jakarta)
+INSERT INTO product_stocks (warehouse_id, product_id, quantity, reserved_quantity) VALUES
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a21', 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a32', 200, 10);
+
+-- Product3 (Keyboard) in Warehouse1 (Jakarta)
+INSERT INTO product_stocks (warehouse_id, product_id, quantity, reserved_quantity) VALUES
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a21', 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33', 100, 0);
+
+-- Product3 (Keyboard) in Warehouse2 (Surabaya)
+INSERT INTO product_stocks (warehouse_id, product_id, quantity, reserved_quantity) VALUES
+('b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33', 75, 2);
