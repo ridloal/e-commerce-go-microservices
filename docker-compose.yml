@@ -1,0 +1,244 @@
+version: '3.8'
+
+services:
+  # API Gateway Service
+  api_gateway:
+    build:
+      context: .
+      dockerfile: cmd/api_gateway/Dockerfile
+    container_name: api_gateway_service
+    ports:
+      - "${API_GATEWAY_PORT:-8080}:${API_GATEWAY_PORT:-8080}" # Host:Container
+    environment:
+      - SERVER_PORT=${API_GATEWAY_PORT:-8080}
+      - USER_SERVICE_URL=${USER_SERVICE_URL}
+      - PRODUCT_SERVICE_URL=${PRODUCT_SERVICE_URL}
+      - WAREHOUSE_SERVICE_URL=${WAREHOUSE_SERVICE_URL}
+      - ORDER_SERVICE_URL=${ORDER_SERVICE_URL}
+    depends_on:
+      - user_service
+      - product_service
+      - warehouse_service
+      - order_service
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  # User Service
+  user_service:
+    build:
+      context: .
+      dockerfile: cmd/user_service/Dockerfile
+    container_name: user_service_app
+    environment:
+      - SERVER_PORT=${USER_SERVER_PORT:-8081}
+      - USER_DB_DSN=${USER_DB_DSN}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+    depends_on:
+      user_db:
+        condition: service_healthy # Tunggu DB sehat dulu
+      migrate_user: # Optional: Tunggu migrasi selesai jika layanan langsung butuh tabel saat start
+        condition: service_completed_successfully
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  user_db:
+    image: postgres:16-alpine
+    container_name: user_service_db
+    ports: # Port mapping untuk akses dari host
+      - "${USER_DB_HOST_PORT:-5441}:5432" # Host:Container
+    environment:
+      - POSTGRES_USER=${USER_DB_USER}
+      - POSTGRES_PASSWORD=${USER_DB_PASSWORD}
+      - POSTGRES_DB=${USER_DB_NAME}
+    volumes:
+      - user_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${USER_DB_USER} -d ${USER_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  migrate_user:
+    image: migrate/migrate:v4.17.1
+    container_name: user_service_migrate
+    volumes:
+      - ./migrations/user_service:/migrations
+    # Menggunakan format list untuk command
+    command: ["-verbose", "-path", "/migrations", "-database", "${USER_DB_DSN}", "up"]
+    depends_on:
+      user_db:
+        condition: service_healthy
+    networks:
+      - ecom_network
+    restart: on-failure
+
+  # Product Service
+  product_service:
+    build:
+      context: .
+      dockerfile: cmd/product_service/Dockerfile
+    container_name: product_service_app
+    environment:
+      - SERVER_PORT=${PRODUCT_SERVER_PORT:-8082}
+      - PRODUCT_DB_DSN=${PRODUCT_DB_DSN}
+      - WAREHOUSE_SERVICE_URL=${WAREHOUSE_SERVICE_URL}
+    depends_on:
+      product_db:
+        condition: service_healthy
+      migrate_product: # Optional
+        condition: service_completed_successfully
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  product_db:
+    image: postgres:16-alpine
+    container_name: product_service_db
+    ports: # Port mapping untuk akses dari host
+      - "${PRODUCT_DB_HOST_PORT:-5442}:5432" # Host:Container
+    environment:
+      - POSTGRES_USER=${PRODUCT_DB_USER}
+      - POSTGRES_PASSWORD=${PRODUCT_DB_PASSWORD}
+      - POSTGRES_DB=${PRODUCT_DB_NAME}
+    volumes:
+      - product_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PRODUCT_DB_USER} -d ${PRODUCT_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  migrate_product:
+    image: migrate/migrate:v4.17.1
+    container_name: product_service_migrate
+    volumes:
+      - ./migrations/product_service:/migrations
+    command: ["-verbose", "-path", "/migrations", "-database", "${PRODUCT_DB_DSN}", "up"]
+    depends_on:
+      product_db:
+        condition: service_healthy
+    networks:
+      - ecom_network
+    restart: on-failure
+
+  # Warehouse Service
+  warehouse_service:
+    build:
+      context: .
+      dockerfile: cmd/warehouse_service/Dockerfile
+    container_name: warehouse_service_app
+    environment:
+      - SERVER_PORT=${WAREHOUSE_SERVER_PORT:-8083}
+      - WAREHOUSE_DB_DSN=${WAREHOUSE_DB_DSN}
+    depends_on:
+      warehouse_db:
+        condition: service_healthy
+      migrate_warehouse: # Optional
+        condition: service_completed_successfully
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  warehouse_db:
+    image: postgres:16-alpine
+    container_name: warehouse_service_db
+    ports: # Port mapping untuk akses dari host
+      - "${WAREHOUSE_DB_HOST_PORT:-5443}:5432" # Host:Container
+    environment:
+      - POSTGRES_USER=${WAREHOUSE_DB_USER}
+      - POSTGRES_PASSWORD=${WAREHOUSE_DB_PASSWORD}
+      - POSTGRES_DB=${WAREHOUSE_DB_NAME}
+    volumes:
+      - warehouse_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${WAREHOUSE_DB_USER} -d ${WAREHOUSE_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  migrate_warehouse:
+    image: migrate/migrate:v4.17.1
+    container_name: warehouse_service_migrate
+    volumes:
+      - ./migrations/warehouse_service:/migrations
+    command: ["-verbose", "-path", "/migrations", "-database", "${WAREHOUSE_DB_DSN}", "up"]
+    depends_on:
+      warehouse_db:
+        condition: service_healthy
+    networks:
+      - ecom_network
+    restart: on-failure
+
+  # Order Service
+  order_service:
+    build:
+      context: .
+      dockerfile: cmd/order_service/Dockerfile
+    container_name: order_service_app
+    environment:
+      - SERVER_PORT=${ORDER_SERVER_PORT:-8084}
+      - ORDER_DB_DSN=${ORDER_DB_DSN}
+      - WAREHOUSE_SERVICE_URL=${WAREHOUSE_SERVICE_URL}
+      - PAYMENT_TIMEOUT_MINUTES=${PAYMENT_TIMEOUT_MINUTES:-2}
+    depends_on:
+      order_db:
+        condition: service_healthy
+      migrate_order: # Optional
+        condition: service_completed_successfully
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  order_db:
+    image: postgres:16-alpine
+    container_name: order_service_db
+    ports: # Port mapping untuk akses dari host
+      - "${ORDER_DB_HOST_PORT:-5444}:5432" # Host:Container
+    environment:
+      - POSTGRES_USER=${ORDER_DB_USER}
+      - POSTGRES_PASSWORD=${ORDER_DB_PASSWORD}
+      - POSTGRES_DB=${ORDER_DB_NAME}
+    volumes:
+      - order_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ORDER_DB_USER} -d ${ORDER_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ecom_network
+    restart: unless-stopped
+
+  migrate_order:
+    image: migrate/migrate:v4.17.1
+    container_name: order_service_migrate
+    volumes:
+      - ./migrations/order_service:/migrations
+    command: ["-verbose", "-path", "/migrations", "-database", "${ORDER_DB_DSN}", "up"]
+    depends_on:
+      order_db:
+        condition: service_healthy
+    networks:
+      - ecom_network
+    restart: on-failure
+
+networks:
+  ecom_network:
+    driver: bridge
+
+volumes:
+  user_db_data:
+  product_db_data:
+  warehouse_db_data:
+  order_db_data:

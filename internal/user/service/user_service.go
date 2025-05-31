@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -17,8 +19,18 @@ import (
 var (
 	ErrInvalidCredentials = errors.New("invalid email/phone or password")
 	ErrUserAlreadyExists  = errors.New("user with this email or phone number already exists")
-	jwtSecretKey          = []byte("your-very-secret-key-for-jwt") // Ganti dan simpan di env var idealnya
 )
+
+var jwtSecretKey []byte
+
+func init() {
+	secret := os.Getenv("JWT_SECRET_KEY")
+	if secret == "" {
+		log.Println("Warning: JWT_SECRET_KEY not set, using default insecure key")
+		secret = "your-very-secret-key-for-jwt" // fallback
+	}
+	jwtSecretKey = []byte(secret)
+}
 
 type UserService interface {
 	Register(ctx context.Context, req domain.RegisterRequest) (*domain.User, error)

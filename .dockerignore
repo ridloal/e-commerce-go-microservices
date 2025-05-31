@@ -1,0 +1,36 @@
+# Git
+.git
+.gitignore
+
+# IDE & OS specific
+.idea/
+.vscode/
+*.iml
+*.DS_Store
+
+# Local environment & dependencies (Go modules will be handled in Dockerfile)
+vendor/
+*.env
+*.env.local
+*.env.*.local
+!*.env.example # Kecuali jika Anda memiliki file contoh
+
+# Build artifacts (jika ada, Go akan build di dalam Docker)
+/bin
+/build
+*.exe
+*.test
+
+# Docker & Compose specific
+docker-compose.override.yml
+pgdata/ # Jika Anda membuat volume data postgres lokal
+
+# Log files
+*.log
+
+# Test data (jika besar dan tidak diperlukan di image produksi)
+testdata/
+
+# Temporary files
+tmp/
+temp/
